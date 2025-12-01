@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "scripts": {
     "server": "node server/app.js",
-    "attack": "node attack/cli.js"
+    "attack": "node attack/cli.js",
+    "check": "bash check-network.sh"
   },
   "dependencies": {
     "chalk": "^4.1.2",

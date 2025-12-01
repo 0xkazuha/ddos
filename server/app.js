@@ -209,10 +209,31 @@ app.use((req, res) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`\nServer running on: http://localhost:${PORT}`);
-  console.log(`Stats API: http://localhost:${PORT}/api/stats`);
-  console.log(`Logs API: http://localhost:${PORT}/api/logs\n`);
+app.listen(PORT, '0.0.0.0', () => {
+  const networkInterfaces = require('os').networkInterfaces();
+  const addresses = [];
+  
+  Object.keys(networkInterfaces).forEach((interfaceName) => {
+    networkInterfaces[interfaceName].forEach((iface) => {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        addresses.push(iface.address);
+      }
+    });
+  });
+  
+  console.log(`\nServer running on:`);
+  console.log(`  Local:   http://localhost:${PORT}`);
+  console.log(`  Local:   http://127.0.0.1:${PORT}`);
+  
+  if (addresses.length > 0) {
+    addresses.forEach(addr => {
+      console.log(`  Network: http://${addr}:${PORT}`);
+    });
+  }
+  
+  console.log(`\nAPI Endpoints:`);
+  console.log(`  Stats: /api/stats`);
+  console.log(`  Logs:  /api/logs\n`);
 });
 
 process.on('SIGINT', () => {
