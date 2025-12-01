@@ -4,11 +4,16 @@
   "scripts": {
     "server": "node server/app.js",
     "attack": "node attack/cli.js",
-    "check": "bash check-network.sh"
+    "check": "bash check-network.sh",
+    "scrape-proxies": "node attack/proxy-scraper.js"
   },
   "dependencies": {
+    "axios": "^1.13.2",
     "chalk": "^4.1.2",
+    "cheerio": "^1.1.2",
     "cors": "^2.8.5",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "https-proxy-agent": "^7.0.6",
+    "socks-proxy-agent": "^8.0.5"
   }
 }

