@@ -8,6 +8,7 @@ const PORT = 3000;
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+app.use(express.static('public'));
 
 app.set('trust proxy', true);
 app.disable('x-powered-by');
